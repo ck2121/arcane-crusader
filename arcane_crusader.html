@@ -22,6 +22,10 @@
   #btn-bomb  { width:58px; height:58px; bottom:140px;right:28px; font-size:12px;}
   #btn-pause { width:44px; height:44px; top:10px;    right:10px; font-size:13px; border-radius:8px; }
   @media (max-width: 900px) { #tc { display: block; } }
+  #btn-fs { width:44px; height:44px; top:10px; left:10px; font-size:16px; border-radius:8px; }
+  #shop-overlay { display:none; position:absolute; bottom:10px; left:50%; transform:translateX(-50%); pointer-events:all; }
+  #btn-continue { background:rgba(80,0,160,0.85); border:2px solid #8844ff; border-radius:10px; color:#FFD700; font-size:16px; font-family:monospace; font-weight:bold; padding:12px 32px; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  #btn-continue:active { background:rgba(120,0,220,0.95); }
 </style>
 </head>
 <body>
@@ -34,6 +38,10 @@
   <button class="tc-btn" id="btn-spell">✦</button>
   <button class="tc-btn" id="btn-bomb">💣</button>
   <button class="tc-btn" id="btn-pause">⏸</button>
+  <button class="tc-btn" id="btn-fs">⛶</button>
+</div>
+<div id="shop-overlay">
+  <button id="btn-continue">CONTINUE TO NEXT LEVEL ▶</button>
 </div>
 </div>
 <script>
@@ -96,7 +104,8 @@ function isSpell()  { return keyJust('KeyL') || keyJust('KeyC'); }
 function isBomb()   { return keyJust('KeyF'); }
 function isPotion() { return keyJust('KeyQ'); }
 function isPause()  { return keyJust('Escape'); }
-function isConfirm(){ return keyJust('Enter') || keyJust('KeyE'); }
+let TouchConfirm = false;
+function isConfirm(){ const t = TouchConfirm; TouchConfirm = false; return keyJust('Enter') || keyJust('KeyE') || t; }
 function isSpell1() { return keyJust('Digit1'); }
 function isSpell2() { return keyJust('Digit2'); }
 function isSpell3() { return keyJust('Digit3'); }
@@ -1906,7 +1915,7 @@ function drawTitle(dt) {
   if (Math.floor(game.titleFlash * 2) % 2 === 0) {
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 18px monospace';
-    ctx.fillText('PRESS ENTER TO START', W/2, 300);
+    ctx.fillText(('ontouchstart' in window) ? 'TAP TO START' : 'PRESS ENTER TO START', W/2, 300);
   }
 
   // Controls
@@ -2032,7 +2041,7 @@ function drawShop() {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#aaa';
   ctx.font = '11px monospace';
-  ctx.fillText('↑↓ navigate   ENTER to buy   E to continue to next level', W/2, H - 20);
+  ctx.fillText(('ontouchstart' in window) ? 'TAP item to select  •  TAP again to buy' : '↑↓ navigate   ENTER to buy   E to continue to next level', W/2, H - 20);
 }
 
 function handleShopInput() {
@@ -2404,8 +2413,86 @@ requestAnimationFrame(ts => { lastTime = ts; requestAnimationFrame(loop); });
     }, { passive: false });
   });
 
-  // Prevent page scroll on canvas touch
-  document.getElementById('c').addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+  // Fullscreen button
+  const btnFs = document.getElementById('btn-fs');
+  if (btnFs) {
+    btnFs.addEventListener('touchstart', e => {
+      e.preventDefault();
+      const el = document.documentElement;
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        const req = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (req) req.call(el).then(() => {
+          if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(()=>{});
+          scaleCanvas();
+        }).catch(()=>{});
+      } else {
+        const ex = document.exitFullscreen || document.webkitExitFullscreen;
+        if (ex) ex.call(document);
+      }
+    }, { passive: false });
+  }
+  document.addEventListener('fullscreenchange', scaleCanvas);
+  document.addEventListener('webkitfullscreenchange', scaleCanvas);
+  window.addEventListener('orientationchange', () => setTimeout(scaleCanvas, 200));
+
+  // Shop overlay button
+  const btnContinue = document.getElementById('btn-continue');
+  if (btnContinue) {
+    btnContinue.addEventListener('touchstart', e => { e.preventDefault(); TouchConfirm = false; startNextLevel(); }, { passive: false });
+    btnContinue.addEventListener('click', () => { startNextLevel(); });
+  }
+
+  // Shop overlay visibility
+  function updateShopOverlay() {
+    const so = document.getElementById('shop-overlay');
+    if (!so) return;
+    so.style.display = (typeof game !== 'undefined' && game.state === 'shop' && 'ontouchstart' in window) ? 'block' : 'none';
+  }
+
+  // Canvas tap: confirm on title/gameover/levelcomplete/win + shop item selection
+  let shopLastTap = -1;
+  document.getElementById('c').addEventListener('touchstart', e => {
+    e.preventDefault();
+    updateShopOverlay();
+    if (typeof game === 'undefined') return;
+    const st = game.state;
+    if (st === 'title' || st === 'gameover' || st === 'levelcomplete' || st === 'win' || st === 'pause') {
+      TouchConfirm = true;
+      return;
+    }
+    if (st === 'shop') {
+      const rect = document.getElementById('c').getBoundingClientRect();
+      const touch = e.changedTouches[0];
+      const cx = (touch.clientX - rect.left) * (800 / rect.width);
+      const cy = (touch.clientY - rect.top) * (480 / rect.height);
+      // Shop item hit test: cols=2, itemW=340, itemH=50, startX=50, startY=80, gap=20,8
+      const cols = 2, itemW = 340, itemH = 50, startX = 50, startY = 80;
+      const items = (typeof game !== 'undefined') ? game.shopItems : [];
+      let hit = -1;
+      items.forEach((item, idx) => {
+        const col = idx % cols, row = Math.floor(idx / cols);
+        const ix = startX + col * (itemW + 20), iy = startY + row * (itemH + 8);
+        if (cx >= ix && cx <= ix+itemW && cy >= iy && cy <= iy+itemH) hit = idx;
+      });
+      if (hit >= 0) {
+        if (hit === shopIdx && Date.now() - shopLastTap < 600) {
+          // Double-tap = buy
+          const item = game.shopItems[hit];
+          if (item && item.bought < item.maxBuy && game.player.coins >= item.cost) {
+            game.player.coins -= item.cost; item.bought++; applyShopItem(item.id);
+          }
+          shopLastTap = -1;
+        } else {
+          shopIdx = hit;
+          shopLastTap = Date.now();
+        }
+      }
+    }
+  }, { passive: false });
+
+  // Run overlay check each frame
+  const _origLoop = requestAnimationFrame;
+  setInterval(updateShopOverlay, 200);
 })();
 
 </script>
